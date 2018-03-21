@@ -15,11 +15,37 @@ import codecs
 import re
 import os
 import unicodedata
+import json
 
 def load_vocab():
     char2idx = {char: idx for idx, char in enumerate(hp.vocab)}
     idx2char = {idx: char for idx, char in enumerate(hp.vocab)}
     return char2idx, idx2char
+
+def load_mandarin():
+    # find all words
+    transcript = os.path.join(hp.data, 'transcript/aishell_transcript_v0.8.txt')
+    lines = codecs.open(transcript, 'r', 'utf-8').readlines()
+    charset = set()
+    for line in lines:
+        _, text = line.strip().split(' ', 1)
+        for c in text:
+            charset.add(c)
+    charlist = ['E',] + list(charset)
+    
+    char2idx = {char: idx for idx, char in enumerate(charlist)}
+    idx2char = {idx: char for idx, char in enumerate(charlist)}
+    with open(hp.logdir + '/idx2char-json.txt', 'wt') as jsonfile:
+        jsonfile.write(json.dumps(idx2char))
+    return char2idx, idx2char
+
+def mandarin_normalize(text):
+    text = ''.join(char for char in unicodedata.normalize('NFD', text)
+                           if unicodedata.category(char) != 'Mn') # Strip accents
+    # '[^[\u4e00-\u9fa5]]'
+    # text = re.sub("\W", " ", text)
+    text = re.sub("[ ]+", " ", text)
+    return text
 
 def text_normalize(text):
     text = ''.join(char for char in unicodedata.normalize('NFD', text)
@@ -56,6 +82,24 @@ def load_data(mode="train"):
                 texts.append(np.array(text, np.int32).tostring())
 
             return fpaths, text_lengths, texts
+        elif "aishell" in hp.data:
+            fpaths, text_lengths, texts = [], [], []
+            zhchar2idx, zhidx2char = load_mandarin()
+            transcript = os.path.join(hp.data, 'transcript/aishell_transcript_v0.8.txt')
+            lines = codecs.open(transcript, 'r', 'utf-8').readlines()
+            for line in lines:
+                fname, text = line.strip().split(' ', 1)
+
+                fpath = os.path.join(hp.data, "wav/train/", fname[6:11], fname + ".wav")
+                fpaths.append(fpath)
+
+                text = mandarin_normalize(text) + "E"  # E: EOS
+                text = [zhchar2idx[char] for char in text]
+                text_lengths.append(len(text))
+                texts.append(np.array(text, np.int32).tostring())
+
+            return fpaths, text_lengths, texts
+
         else: # nick or kate
             # Parse
             fpaths, text_lengths, texts = [], [], []
@@ -74,16 +118,29 @@ def load_data(mode="train"):
                 text_lengths.append(len(text))
                 texts.append(np.array(text, np.int32).tostring())
 
+
         return fpaths, text_lengths, texts
 
     else: # synthesize on unseen test text.
-        # Parse
-        lines = codecs.open(hp.test_data, 'r', 'utf-8').readlines()[1:]
-        sents = [text_normalize(line.split(" ", 1)[-1]).strip() + "E" for line in lines] # text normalization, E: EOS
-        texts = np.zeros((len(sents), hp.max_N), np.int32)
-        for i, sent in enumerate(sents):
-            texts[i, :len(sent)] = [char2idx[char] for char in sent]
-        return texts
+        if "aishell" in hp.data:
+            # Parse
+            zhidx2char = json.load(open(hp.logdir + '/idx2char-json.txt'))
+            zhchar2idx = {char:idx for idx, char in zhidx2char.items()}
+
+            lines = codecs.open(hp.test_data, 'r', 'utf-8').readlines()[1:]
+            sents = [mandarin_normalize(line.split(" ", 1)[-1]).strip() + "E" for line in lines] # text normalization, E: EOS
+            texts = np.zeros((len(sents), hp.max_N), np.int32)
+            for i, sent in enumerate(sents):
+                texts[i, :len(sent)] = [zhchar2idx[char] for char in sent]
+            return texts
+        else:
+            # Parse
+            lines = codecs.open(hp.test_data, 'r', 'utf-8').readlines()[1:]
+            sents = [text_normalize(line.split(" ", 1)[-1]).strip() + "E" for line in lines] # text normalization, E: EOS
+            texts = np.zeros((len(sents), hp.max_N), np.int32)
+            for i, sent in enumerate(sents):
+                texts[i, :len(sent)] = [char2idx[char] for char in sent]
+            return texts
 
 def get_batch():
     """Loads training data and put them in queues"""
@@ -129,4 +186,3 @@ def get_batch():
                                             dynamic_pad=True)
 
     return texts, mels, mags, fnames, num_batch
-

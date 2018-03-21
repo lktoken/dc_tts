@@ -21,8 +21,12 @@ def TextEnc(L, training=True):
         V: Values. (B, N, d)
     '''
     i = 1
+    if 'aishell' in hp.data:
+        vocab_size = len(json.load(open(hp.logdir + '/idx2char-json.txt')))
+    else:
+        vocab_size = len(hp.vocab)
     tensor = embed(L,
-                   vocab_size=len(hp.vocab),
+                   vocab_size = vocab_size,
                    num_units=hp.e,
                    scope="embed_{}".format(i)); i += 1
     tensor = conv1d(tensor,
